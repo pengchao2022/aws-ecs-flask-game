@@ -139,7 +139,7 @@ resource "aws_db_instance" "main" {
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   engine                 = "postgres"
-  engine_version         = "15.4"
+  engine_version         = "15.12"
   username               = var.db_username
   password               = var.db_password
   db_name                = "tododb"
