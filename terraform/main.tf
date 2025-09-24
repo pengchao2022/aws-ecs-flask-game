@@ -278,15 +278,3 @@ resource "aws_cloudwatch_log_group" "ecs" {
   }
 }
 
-# Outputs
-output "ecr_repository_url" {
-  value = aws_ecr_repository.app.repository_url
-}
-
-output "rds_endpoint" {
-  value = aws_db_instance.main.address
-}
-
-output "ecs_service_url" {
-  value = "http://${aws_ecs_service.main.name}.${var.aws_region}.elb.amazonaws.com:5000"
-}
