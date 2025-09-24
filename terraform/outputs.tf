@@ -18,3 +18,8 @@ output "ecs_service_name" {
   description = "ECS service name"
   value       = aws_ecs_service.main.name
 }
+
+
+output "ecs_service_url" {
+  value = "http://${aws_ecs_service.main.name}.${var.aws_region}.elb.amazonaws.com:5000"
+}
