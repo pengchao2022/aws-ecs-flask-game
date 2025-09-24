@@ -4,63 +4,45 @@ on:
   push:
     branches: [ main ]
 
-env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: flask-todo
-  ECS_SERVICE: flask-todo-service
-  ECS_CLUSTER: flask-todo-cluster
-  ECS_TASK_DEFINITION: terraform/task-definition.json
-  CONTAINER_NAME: flask-todo-container
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Configure AWS credentials
+    - uses: actions/checkout@v4
+    
+    - name: Setup AWS
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        aws-region: us-east-1
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.0
 
-    - name: Terraform Init
-      run: terraform init
-      working-directory: terraform
-
-    - name: Terraform Plan
-      run: terraform plan -var="db_password=${{ secrets.DB_PASSWORD }}" -var="github_repo=${{ github.repository }}"
-      working-directory: terraform
-
-    - name: Terraform Apply
-      run: terraform apply -auto-approve -var="db_password=${{ secrets.DB_PASSWORD }}" -var="github_repo=${{ github.repository }}"
-      working-directory: terraform
-
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-
-    - name: Build, tag, and push image to Amazon ECR
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        IMAGE_TAG: latest
+    - name: Deploy Infrastructure
       run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-    - name: Deploy to ECS
+        cd terraform
+        terraform init
+        terraform apply -auto-approve -var="db_password=${{ secrets.DB_PASSWORD }}"
+      
+    - name: Deploy App
       run: |
+        # 获取 ECR 仓库 URL
+        ECR_URL=$(cd terraform && terraform output -raw ecr_repository_url)
+        
+        # 构建和推送镜像
+        docker build -t $ECR_URL:latest .
+        docker push $ECR_URL:latest
+        
+        # 获取 ECS 集群和服务名
+        CLUSTER=$(cd terraform && terraform output -raw ecs_cluster_name)
+        SERVICE=$(cd terraform && terraform output -raw ecs_service_name)
+        
+        # 更新服务
         aws ecs update-service \
-          --cluster ${{ env.ECS_CLUSTER }} \
-          --service ${{ env.ECS_SERVICE }} \
+          --cluster $CLUSTER \
+          --service $SERVICE \
           --force-new-deployment \
-          --region ${{ env.AWS_REGION }}
+          --region us-east-1
