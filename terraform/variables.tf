@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "app_name" {
   description = "Application name"
   type        = string
-  default     = "flask-todo"
+  default     = "flask-to-do"
 }
 
 variable "environment" {
