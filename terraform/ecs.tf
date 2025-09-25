@@ -133,7 +133,7 @@ resource "aws_lb_listener" "app" {
 resource "aws_db_instance" "main" {
   identifier              = "${var.app_name}-db"
   engine                  = "postgres"
-  engine_version          = "14.9"
+  engine_version          = "15.14"
   instance_class          = "db.t3.micro"
   allocated_storage       = 20
   max_allocated_storage   = 100
