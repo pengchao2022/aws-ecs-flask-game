@@ -298,3 +298,43 @@ resource "aws_security_group" "rds" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+
+
+# ECR Force delete
+resource "aws_ecr_repository" "app" {
+  name = var.app_name
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  # 允许强制删除非空仓库
+  force_delete = true
+
+  tags = {
+    Name        = "${var.app_name}-ecr"
+    Environment = var.environment
+  }
+}
+
+# ECR clear old image
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 10 images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 10
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
