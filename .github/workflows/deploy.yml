@@ -13,46 +13,28 @@ env:
   CONTAINER_NAME: flask-game
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-          
-      - name: Install Python dependencies
+      - name: Validate files exist
         run: |
-          pip install flask==2.3.3 psycopg2-binary==2.9.7 gunicorn==21.2.0
-          
-      - name: Verify Flask installation
-        run: |
-          python -c "import flask; print('✅ Flask version:', flask.__version__)"
-          
-      - name: Verify all required modules
-        run: |
-          python -c "
-          modules = ['flask', 'psycopg2', 'gunicorn']
-          for module in modules:
-              try:
-                  __import__(module)
-                  print(f'✅ {module} imported successfully')
-              except ImportError as e:
-                  print(f'❌ Failed to import {module}: {e}')
-                  exit(1)
-          print('✅ All modules imported successfully')
-          "
+          echo "Checking required files..."
+          [ -f "src/app.py" ] && echo "✅ src/app.py exists" || exit 1
+          [ -f "src/requirements.txt" ] && echo "✅ src/requirements.txt exists" || exit 1
+          [ -f "docker/Dockerfile" ] && echo "✅ docker/Dockerfile exists" || exit 1
+          [ -f "terraform/main.tf" ] && echo "✅ terraform/main.tf exists" || exit 1
+          echo "✅ All required files are present"
 
-      - name: Check application syntax
+      - name: Validate Python syntax
         run: |
           cd src
           python -m py_compile app.py
-          echo "✅ Application syntax is correct"
+          echo "✅ Python syntax is valid"
 
   deploy:
-    needs: test
+    needs: validate
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     
@@ -100,28 +82,32 @@ jobs:
         run: terraform apply -input=false -auto-approve tfplan
         working-directory: terraform
 
+      - name: Get ECR repository URL
+        id: ecr-repo
+        run: |
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          echo "ecr_repository_url=$ECR_URL" >> $GITHUB_OUTPUT
+        working-directory: terraform
+
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          IMAGE_TAG: latest
-        run: |
-          # 构建 Docker 镜像
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f docker/Dockerfile .
-          
-          # 推送镜像到 ECR
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ecr-repo.outputs.ecr_repository_url }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Force new ECS deployment
         run: |
-          # 强制 ECS 服务进行新部署
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
             --service $ECS_SERVICE \
@@ -131,14 +117,12 @@ jobs:
       - name: Wait for deployment to stabilize
         run: |
           echo "Waiting for deployment to stabilize..."
-          # 等待服务完全部署
           sleep 180
 
       - name: Get ALB DNS name
         id: get-alb
         run: |
           ALB_DNS=$(terraform output -raw alb_dns_name)
-          echo "Application URL: http://$ALB_DNS"
           echo "alb_dns_name=$ALB_DNS" >> $GITHUB_OUTPUT
         working-directory: terraform
 
@@ -147,13 +131,13 @@ jobs:
           echo "Testing application endpoint: http://${{ steps.get-alb.outputs.alb_dns_name }}"
           
           # 使用重试机制测试应用端点
-          max_attempts=10
+          max_attempts=12
           attempt=1
           
           while [ $attempt -le $max_attempts ]; do
             echo "Attempt $attempt of $max_attempts..."
             
-            if curl -f --connect-timeout 30 http://${{ steps.get-alb.outputs.alb_dns_name }}; then
+            if curl -f --max-time 30 http://${{ steps.get-alb.outputs.alb_dns_name }}; then
               echo "✅ Application is responding correctly"
               exit 0
             else
@@ -164,7 +148,6 @@ jobs:
           done
           
           echo "⚠️ Application might still be starting - check ECS service logs for details"
-          # 不退出失败，让部署继续完成
 
       - name: Deployment summary
         run: |
@@ -172,8 +155,4 @@ jobs:
           echo "🌐 Application URL: http://${{ steps.get-alb.outputs.alb_dns_name }}"
           echo "📊 ECS Cluster: ${{ env.ECS_CLUSTER }}"
           echo "🚀 ECS Service: ${{ env.ECS_SERVICE }}"
-          echo ""
-          echo "💡 Next steps:"
-          echo "   - The application might take a few minutes to fully start"
-          echo "   - Check CloudWatch logs if the application is not accessible"
-          echo "   - Use the Destroy workflow to clean up resources when done"
+          echo "🐳 ECR Repository: ${{ steps.ecr-repo.outputs.ecr_repository_url }}"
