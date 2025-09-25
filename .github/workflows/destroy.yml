@@ -1,0 +1,72 @@
+name: Destroy Flask Game Infrastructure
+
+on:
+  workflow_dispatch:  # 仅手动触发
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform
+        env:
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_github_repo: ${{ github.repository }}
+
+      - name: Confirm Destruction
+        id: confirm
+        run: |
+          echo "⚠️  WARNING: This will DESTROY all infrastructure including:"
+          echo "   - ECS Cluster and Service"
+          echo "   - RDS Database (ALL DATA WILL BE LOST)"
+          echo "   - ALB and Target Groups"
+          echo "   - VPC and Networking components"
+          echo "   - ECR Repository"
+          echo ""
+          echo "This action cannot be undone!"
+          echo ""
+          echo "Proceeding with destruction in 30 seconds..."
+          sleep 30
+
+      - name: Terraform Plan Destroy
+        run: terraform plan -destroy -input=false -out=tfdestroyplan
+        working-directory: terraform
+        env:
+          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+          TF_VAR_github_repo: ${{ github.repository }}
+
+      - name: Terraform Destroy
+        run: terraform apply -input=false -auto-approve tfdestroyplan
+        working-directory: terraform
+
+      - name: Clean up Terraform state
+        run: |
+          echo "Infrastructure destruction completed."
+          echo "Terraform state has been updated accordingly."
+
+      - name: Destruction Complete
+        run: |
+          echo "✅ Infrastructure destruction completed successfully!"
+          echo "📝 All AWS resources have been terminated."
+          echo "💾 Remember: Database data cannot be recovered."

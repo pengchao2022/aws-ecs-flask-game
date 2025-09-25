@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flask 游戏</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .game-container { max-width: 600px; margin: 0 auto; }
+        .score-input { margin: 20px 0; }
+        button { padding: 10px 20px; margin: 5px; }
+        #scores-list { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>🎮 Flask 游戏平台</h1>
+        
+        <div class="score-input">
+            <h3>提交分数</h3>
+            <input type="text" id="playerName" placeholder="玩家名称">
+            <input type="number" id="score" placeholder="分数">
+            <button onclick="submitScore()">提交分数</button>
+        </div>
+
+        <div class="score-input">
+            <h3>模拟游戏</h3>
+            <button onclick="generateRandomScore()">生成随机分数</button>
+        </div>
+
+        <div id="scores-list">
+            <h3>排行榜</h3>
+            <button onclick="loadScores()">刷新排行榜</button>
+            <ul id="scores"></ul>
+        </div>
+    </div>
+
+    <script>
+        async function submitScore() {
+            const playerName = document.getElementById('playerName').value;
+            const score = document.getElementById('score').value;
+            
+            const response = await fetch('/api/scores', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ player_name: playerName, score: parseInt(score) })
+            });
+            
+            if (response.ok) {
+                alert('分数提交成功!');
+                loadScores();
+            } else {
+                alert('提交失败!');
+            }
+        }
+
+        function generateRandomScore() {
+            const names = ['玩家A', '玩家B', '玩家C', '玩家D', '玩家E'];
+            const randomName = names[Math.floor(Math.random() * names.length)];
+            const randomScore = Math.floor(Math.random() * 1000);
+            
+            document.getElementById('playerName').value = randomName;
+            document.getElementById('score').value = randomScore;
+        }
+
+        async function loadScores() {
+            const response = await fetch('/api/scores');
+            const scores = await response.json();
+            
+            const scoresList = document.getElementById('scores');
+            scoresList.innerHTML = '';
+            
+            scores.forEach(score => {
+                const li = document.createElement('li');
+                li.textContent = `${score.player_name}: ${score.score} 分`;
+                scoresList.appendChild(li);
+            });
+        }
+
+        // 页面加载时获取分数
+        loadScores();
+    </script>
+</body>
+</html>
