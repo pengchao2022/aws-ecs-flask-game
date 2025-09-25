@@ -2,6 +2,11 @@ name: Destroy Flask Game Infrastructure
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Type YES to confirm destruction of all infrastructure'
+        required: true
+        default: 'NO'
 
 env:
   AWS_REGION: us-east-1
@@ -20,10 +25,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Manual confirmation
+      - name: Confirm destruction
         run: |
           echo "🚨 DESTRUCTION CONFIRMATION REQUIRED 🚨"
           echo "This will DESTROY all infrastructure including:"
@@ -32,17 +34,13 @@ jobs:
           echo "• ALB & Target Groups"
           echo "• VPC & Networking components"
           echo "• ECR Repository (including all images)"
-          echo ""
-          echo "Type 'DESTROY' to continue or press Ctrl+C to cancel:"
-          read user_input
-          if [ "$user_input" != "DESTROY" ]; then
-            echo "❌ Destruction cancelled"
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "YES" ]; then
+            echo "❌ Destruction not confirmed. Exiting."
             exit 1
           fi
 
       - name: Stop ECS tasks and services
         run: |
-          # 停止 ECS 服务
           aws ecs update-service \
             --cluster flask-game-cluster \
             --service flask-game-service \
@@ -51,7 +49,6 @@ jobs:
           
           sleep 30
           
-          # 删除 ECS 服务
           aws ecs delete-service \
             --cluster flask-game-cluster \
             --service flask-game-service \
@@ -60,38 +57,15 @@ jobs:
 
       - name: Force delete ECR repository
         run: |
-          # 强制删除 ECR 仓库及其所有镜像
           REPO_NAME="flask-game"
-          
-          # 检查仓库是否存在
           if aws ecr describe-repositories --repository-names $REPO_NAME --region $AWS_REGION > /dev/null 2>&1; then
-            echo "ECR repository exists, force deleting..."
-            
-            # 获取所有镜像
+            echo "ECR repository exists, deleting all images..."
             IMAGE_DIGESTS=$(aws ecr list-images --repository-name $REPO_NAME --region $AWS_REGION --query 'imageIds[].imageDigest' --output text)
-            
-            if [ ! -z "$IMAGE_DIGESTS" ]; then
-              echo "Deleting all images from ECR repository..."
-              
-              # 为每个镜像摘要创建删除命令
-              DIGEST_ARGS=""
-              for digest in $IMAGE_DIGESTS; do
-                DIGEST_ARGS="$DIGEST_ARGS imageDigest=$digest"
-              done
-              
-              # 批量删除镜像
-              aws ecr batch-delete-image \
-                --repository-name $REPO_NAME \
-                --image-ids $DIGEST_ARGS \
-                --region $AWS_REGION || echo "Failed to delete some images, continuing..."
-            fi
-            
-            # 强制删除仓库
-            aws ecr delete-repository \
-              --repository-name $REPO_NAME \
-              --force \
-              --region $AWS_REGION
-            echo "✅ ECR repository force deleted"
+            for digest in $IMAGE_DIGESTS; do
+              aws ecr batch-delete-image --repository-name $REPO_NAME --image-ids imageDigest=$digest --region $AWS_REGION || true
+            done
+            aws ecr delete-repository --repository-name $REPO_NAME --force --region $AWS_REGION
+            echo "✅ ECR repository deleted"
           else
             echo "ECR repository does not exist"
           fi
@@ -101,23 +75,19 @@ jobs:
         working-directory: terraform
 
       - name: Terraform Destroy (skip ECR)
-        run: |
-          # 使用-target参数跳过ECR资源的销毁，因为我们已经手动删除了
-          terraform destroy -auto-approve \
-            -target=aws_db_instance.main \
-            -target=aws_ecs_service.main \
-            -target=aws_ecs_cluster.main \
-            -target=aws_lb.main \
-            -target=aws_vpc.main
+        run: terraform destroy -auto-approve \
+              -target=aws_db_instance.main \
+              -target=aws_ecs_service.main \
+              -target=aws_ecs_cluster.main \
+              -target=aws_lb.main \
+              -target=aws_vpc.main
         working-directory: terraform
         env:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
 
-      - name: Complete Terraform Destroy
-        run: |
-          # 现在执行完整的destroy，ECR应该已经不存在了
-          terraform destroy -auto-approve
+      - name: Terraform Destroy (complete)
+        run: terraform destroy -auto-approve
         working-directory: terraform
         env:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
