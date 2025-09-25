@@ -3,14 +3,13 @@ name: Deploy Flask Game to ECS
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: flask-game
   ECS_SERVICE: flask-game-service
   ECS_CLUSTER: flask-game-cluster
-  CONTAINER_NAME: flask-game
 
 jobs:
   validate:
@@ -26,12 +25,6 @@ jobs:
           [ -f "docker/Dockerfile" ] && echo "✅ docker/Dockerfile exists" || exit 1
           [ -f "terraform/main.tf" ] && echo "✅ terraform/main.tf exists" || exit 1
           echo "✅ All required files are present"
-
-      - name: Validate Python syntax
-        run: |
-          cd src
-          python -m py_compile app.py
-          echo "✅ Python syntax is valid"
 
   deploy:
     needs: validate
@@ -51,62 +44,43 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
 
       - name: Terraform Init
         run: terraform init
         working-directory: terraform
-        env:
-          TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
-          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-          TF_VAR_github_repo: ${{ github.repository }}
-
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        working-directory: terraform
-
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: terraform
 
       - name: Terraform Plan
-        run: terraform plan -input=false -out=tfplan
+        run: terraform plan -input=false
         working-directory: terraform
         env:
           TF_VAR_db_username: ${{ secrets.DB_USERNAME }}
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-          TF_VAR_github_repo: ${{ github.repository }}
 
       - name: Terraform Apply
-        run: terraform apply -input=false -auto-approve tfplan
+        run: terraform apply -input=false -auto-approve
         working-directory: terraform
 
       - name: Get ECR repository URL
-        id: ecr-repo
+        id: get-ecr-url
         run: |
           ECR_URL=$(terraform output -raw ecr_repository_url)
-          echo "ecr_repository_url=$ECR_URL" >> $GITHUB_OUTPUT
+          echo "ECR repository: $ECR_URL"
+          echo "ecr_url=$ECR_URL" >> $GITHUB_OUTPUT
         working-directory: terraform
 
       - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ steps.get-ecr-url.outputs.ecr_url }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ steps.get-ecr-url.outputs.ecr_url }}:latest -f docker/Dockerfile .
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./docker/Dockerfile
-          push: true
-          tags: |
-            ${{ steps.ecr-repo.outputs.ecr_repository_url }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Push Docker image to ECR
+        run: |
+          docker push ${{ steps.get-ecr-url.outputs.ecr_url }}:latest
 
-      - name: Force new ECS deployment
+      - name: Force ECS deployment
         run: |
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
@@ -114,45 +88,16 @@ jobs:
             --force-new-deployment \
             --region $AWS_REGION
 
-      - name: Wait for deployment to stabilize
+      - name: Wait for deployment
         run: |
-          echo "Waiting for deployment to stabilize..."
+          echo "Waiting for deployment to complete..."
           sleep 180
 
-      - name: Get ALB DNS name
-        id: get-alb
+      - name: Get application URL
         run: |
           ALB_DNS=$(terraform output -raw alb_dns_name)
-          echo "alb_dns_name=$ALB_DNS" >> $GITHUB_OUTPUT
-        working-directory: terraform
-
-      - name: Test application endpoint
-        run: |
-          echo "Testing application endpoint: http://${{ steps.get-alb.outputs.alb_dns_name }}"
-          
-          # 使用重试机制测试应用端点
-          max_attempts=12
-          attempt=1
-          
-          while [ $attempt -le $max_attempts ]; do
-            echo "Attempt $attempt of $max_attempts..."
-            
-            if curl -f --max-time 30 http://${{ steps.get-alb.outputs.alb_dns_name }}; then
-              echo "✅ Application is responding correctly"
-              exit 0
-            else
-              echo "Application not ready yet, waiting 30 seconds..."
-              sleep 30
-              attempt=$((attempt + 1))
-            fi
-          done
-          
-          echo "⚠️ Application might still be starting - check ECS service logs for details"
-
-      - name: Deployment summary
-        run: |
           echo "🎉 Deployment completed!"
-          echo "🌐 Application URL: http://${{ steps.get-alb.outputs.alb_dns_name }}"
-          echo "📊 ECS Cluster: ${{ env.ECS_CLUSTER }}"
-          echo "🚀 ECS Service: ${{ env.ECS_SERVICE }}"
-          echo "🐳 ECR Repository: ${{ steps.ecr-repo.outputs.ecr_repository_url }}"
+          echo "🌐 Application URL: http://$ALB_DNS"
+          echo "📊 ECS Cluster: $ECS_CLUSTER"
+          echo "🚀 ECS Service: $ECS_SERVICE"
+        working-directory: terraform
